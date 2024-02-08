@@ -1,0 +1,308 @@
+---
+title: "Analysis of logit and probit models"
+author: "aleniart"
+output: 
+  html_document:
+    toc: TRUE
+    toc_float: TRUE
+    theme: "flatly"
+---
+
+The file household_dataset.csv contains data regarding a sample of 500 households randomly selected in a certain province. For these households, the following variables were obtained:
+
+1) income – average monthly income per person in the household,
+2) expenses – average monthly expenses per person in the household,
+3) sex – gender of the head of the household,
+4) car – number of cars in the household,
+5) satisfaction – satisfaction of the financial situation.
+
+Data source: fictional data
+
+### Necessary libraries
+```{r message=FALSE, warning=FALSE}
+library(car) # vif() function
+library(ggplot2) # plots - ggplot() function
+library(pscl) #pseudo-R2 pR2() function
+library(pROC) #roc, auc functions
+```
+
+### Loading the dataset
+```{r}
+data <- read.table("household_dataset.csv", header = TRUE, sep = ";",dec=",")
+data$sex <- as.factor(data$sex)
+data$satisfaction <- as.factor(data$satisfaction)
+```
+
+### Descriptive statistics for each variable 
+```{r} 
+summary(data)
+```
+**Income**
+
+The average income is 2275 PLN and is close to the median, which is 2168 PLN, meaning that half of the respondents have an income below this value and half above.
+The maximum income is 6062 PLN, which suggests that there are people with relatively high incomes in the sample (just to recall, this is the amount per person in the household).
+
+**Expenses**
+
+The average monthly expenses are 267 PLN per person, which is also close to the median (which is 258 PLN), while the maximum expenses are 704 PLN per person.
+
+**Sex**
+
+In most cases, the head of the household are men (about 70%). Women are only about 30%.
+
+**Car**
+
+The surveyed households have between 0 and 2 vehicles.
+
+**Satisfaction**
+
+The majority of interviewed households (about 58%) declare they are not satisfied with their current financial situation.
+
+### Splitting the dataset into training and testing sets
+
+The training set is used to build the model, and the testing set is used to evaluate the model. We will randomly split it in the proportion of 70% and 30% respectively. With each call to the `sample()` function, we get different sets. To ensure experiment repeatability, we use the `set.seed()` function, which initializes the "seed" for the random number generator - for a fixed "seed" at any given time and on any computer, the same set of random numbers is obtained.
+
+```{r}
+set.seed(1257)     #set.seed(NULL) --> removing the "seed"
+n <- nrow(data)
+random_numbers <- sample(c(1:n), round(0.7*n), replace = FALSE)
+train_data <- data[random_numbers,]
+test_data <- data[-random_numbers,]
+```
+
+Checking the proportions of satisfied and dissatisfied in the data subsets.
+
+```{r}
+round(table(data$satisfaction)/nrow(data),2)
+round(table(train_data$satisfaction)/nrow(train_data),2)
+round(table(test_data$satisfaction)/nrow(test_data),2)
+```
+
+### Checking pairwise correlations between explanatory variables
+
+Correlation matrix for quantitative endogenous variables.
+```{r}
+round(cor(train_data[,c(1,2,4)]),3)
+```
+
+All variables are statistically significantly correlated. However, it is recommended to avoid excessively correlated variables in the model, i.e., `|r|>=0.7`. Excessive correlation occurs in the case of income and expenses variables.
+
+### Estimation of single-factor binomial logit models
+
+Model estimation for the dichotomous variable Y `family = binomial` with the default logit linking function `link = logit`.
+
+```{r}
+logit1 <- glm(satisfaction ~ income, data = train_data, family = binomial)
+round(summary(logit1)$coefficients,3)
+logit2 <- glm(satisfaction ~ expenses, data = train_data, family = binomial)
+round(summary(logit2)$coefficients,3)
+logit3 <- glm(satisfaction ~ sex, data = train_data, family = binomial)
+round(summary(logit3)$coefficients,3)
+logit4 <- glm(satisfaction ~ car, data = train_data, family = binomial)
+round(summary(logit4)$coefficients,3)
+```
+
+### Comparison of goodness-of-fit of logit models 1-4
+```{r}
+model_evaluation <- function(model) {
+  AIC_criterion <- c(model$aic)
+  McFadden<-pR2(model)[4]
+  Cragg_Uhler<-pR2(model)[6]
+  evaluation <- data.frame(AIC_criterion, McFadden, Cragg_Uhler)
+  return(evaluation)
+}
+logit_results <- rbind(
+  model_1=model_evaluation(logit1), 
+  model_2=model_evaluation(logit2), 
+  model_3=model_evaluation(logit3), 
+  model_4=model_evaluation(logit4))
+round(logit_results,3)
+```
+**Conclusions**
+
+The best model is model 1 because its AIC criterion is the smallest and the McFadden and Cragg_Uhler metrics are the largest compared to the results for the other models.
+
+### Model selection and interpretation
+
+Selected model - satisfaction vs income
+```{r}
+round(logit1$coefficients,4)
+```
+`logit (p) = -3.2297 + 0.0013*income`
+exp(b0) = 0.04, where b0 is the intercept => interpreted as the odds of the event in the reference group (xi = 0), if it makes sense => not relevant here.
+
+**exp(bi)**
+```{r}
+round(exp(logit1$coefficients),4)
+```
+`exp(b1) = 1.0013 => (exp(b1)-1)*100% = 0.13%`
+If income increases by 1 PLN, the chance of satisfaction increases on average by 0.13%.
+
+**exp(100 x bi)**
+```{r}
+round(exp(100*logit1$coefficients[2]),4)
+```
+`exp(100b1) = 1.135 => (exp(100b1)-1)*100% = 13.5%`
+If income increases by 100 PLN, the chance of satisfaction increases on average by 13.5%.
+
+**exp(1000 x bi)**
+```{r}
+round(exp(1000*logit1$coefficients[2]),4)
+```
+`exp(1000b1) = 3.55 => (exp(1000b1)-1)*100% = 255%`
+If income increases by 1000 PLN, the chance of satisfaction increases on average by 255% (**3.5 times**).
+
+### Estimation of binomial probit model
+
+Model estimation for the dichotomous variable Y `family = binomial` with the probit linking function `link = probit`.
+
+```{r}
+probit1 <- glm(satisfaction ~ income, data = train_data, family = binomial(link=probit))
+round(summary(probit1)$coefficients,3)
+```
+
+In case of the probit model, the explanatory variable will be interpreted in the context of stimulants/de-stimulants. That being said, the income variable is the stimulant of the model.
+
+### Comparison of goodness-of-fit of logit1 and probit1 models
+```{r}
+logit_probit_evaluation <- rbind(
+  logit_model_1=model_evaluation(logit1), 
+  probit_model_1=model_evaluation(probit1))
+round(logit_probit_evaluation,4)
+```
+**Conclusions**
+
+Probit 1 is better as its AIC criterion is the smallest and the McFadden and Cragg_Uhler metrics are the largest compared to the results for the logit1 model - although the difference is small. For presentation purposes, it would be better to choose the logit model (easier interpretation).
+
+### Comparison of prediction quality of logit1 and probit1 models
+
+Accuracy tables for the selected cut-off point p*.
+
+Let p* = proportion from the training sample #n1/N - when the event is rare in the sample
+```{r}
+p <- table(train_data$satisfaction)[2]/nrow(train_data)
+
+cat("Accuracy table for the logit model - training sample\n")
+accuracy_table <- data.frame(observed=logit1$y, predicted=ifelse(logit1$fitted.values>p, 1, 0))
+table(accuracy_table)
+
+cat("Accuracy table for the probit model - training sample\n")
+accuracy_table <- data.frame(observed=probit1$y, predicted=ifelse(probit1$fitted.values>p, 1, 0))
+table(accuracy_table)
+
+cat("Accuracy table for the logit model - test sample\n")
+accuracy_table <- data.frame(observed=test_data$satisfaction, predicted=ifelse(predict(logit1, test_data, type = "response")>p, 1, 0))
+table(accuracy_table)
+
+cat("Accuracy table for the probit model - test sample\n")
+accuracy_table <- data.frame(observed=test_data$satisfaction, predicted=ifelse(predict(probit1, test_data, type = "response")>p, 1, 0))
+table(accuracy_table)
+```
+
+
+### Prediction quality measures
+
+Measures based on the accuracy table for the selected cut-off point p*
+
+The `prediction_measures` function defined below has arguments: `model` (binomial model), `data` (e.g., training, testing set), `Y` (observed Y 0-1 in the analyzed dataset).
+```{r}
+prediction_measures <- function(model, data, Y, p = 0.5) {
+  tab <- table(observed = Y, predicted = ifelse(predict(model, data, type = "response") > p, 1, 0))
+  ACC <- (tab[1,1]+tab[2,2])/sum(tab)
+  ER <- (tab[1,2]+tab[2,1])/sum(tab)
+  SENS <- tab[2,2]/(tab[2,2]+tab[2,1])
+  SPEC <- tab[1,1]/(tab[1,1]+tab[1,2])
+  PPV <- tab[2,2]/(tab[2,2]+tab[1,2])
+  NPV <- tab[1,1]/(tab[1,1]+tab[2,1])
+  measures <- data.frame(ACC, ER, SENS, SPEC, PPV, NPV)
+    return(round(measures,4))
+}
+```
+
+Predictive ability assessment on the training set
+
+```{r}
+prediction_results <- rbind(
+  logit_model = prediction_measures(model = logit1, data = train_data,  Y = train_data$satisfaction, p), 
+  probit_model = prediction_measures(model = probit1, data = train_data, Y = train_data$satisfaction,  p))
+prediction_results
+```
+
+Predictive ability assessment on the test set
+
+```{r}
+prediction_results <- rbind(
+  logit_model = prediction_measures(model = logit1, data = test_data,  Y = test_data$satisfaction, p), 
+  probit_model = prediction_measures(model = probit1, data = test_data, Y = test_data$satisfaction,  p))
+prediction_results
+```
+
+**Conclusions**
+
+In the case of the logit model, the ACC measure is higher, indicating a higher percentage of correctly classified cases. Additionally, the ER measure is lower, suggesting better predictive accuracy. Moreover, the higher SPEC value implies that the logit model is more effective in identifying negative cases. Furthermore, the higher PPV and NPV values suggest that the logit model's predictions are more accurate for positive and negative cases, respectively.
+
+It is necessary to check if the predictive quality measures for the test set have significantly worsened compared to the training set.
+
+### ROC curve
+
+The ROC curve presents the prediction quality of the model for all possible cut-off points p* (it is independent of the choice of p*).The prediction quality on the training and testing sets is compared below for models estimated on the training set.
+
+red curve - ROC determined on the training set
+
+blue curve - ROC determined on the testing set
+
+```{r}
+rocobj1 <- roc(logit1$y, logit1$fitted.values)
+rocobj1_t <- roc(test_data$satisfaction, predict(logit1, test_data, type = "response"))
+plot(rocobj1, main = "ROC curves for the logit model", col="red")
+lines(rocobj1_t, col="blue")
+
+rocobj2 <- roc(probit1$y, probit1$fitted.values)
+rocobj2_t <- roc(test_data$satisfaction, predict(probit1, test_data, type = "response"))
+plot(rocobj2, main = "ROC curves for the probit model", col="red")
+lines(rocobj2_t, col="blue")
+```
+
+Another way to obtain the ROC curve:
+
+```{r}
+ggroc(rocobj1, legacy.axes = TRUE)+
+  ggtitle("ROC curve for the logit model") +
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1), color="red")+
+  geom_hline(aes(yintercept=1), lty=2, color="grey")+
+  geom_hline(aes(yintercept=0), lty=2, color="grey")+
+  geom_vline(aes(xintercept=1), lty=2, color="grey")+
+  geom_vline(aes(xintercept=0), lty=2, color="grey")+
+  theme_classic()
+
+ggroc(rocobj2, legacy.axes = TRUE)+
+  ggtitle("ROC curve for the probit model") +
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1), color="red")+
+  geom_hline(aes(yintercept=1), lty=2, color="grey")+
+  geom_hline(aes(yintercept=0), lty=2, color="grey")+
+  geom_vline(aes(xintercept=1), lty=2, color="grey")+
+  geom_vline(aes(xintercept=0), lty=2, color="grey")+
+  theme_classic()
+```
+
+### Surface area under the ROC curve
+
+For the training set:
+```{r}
+AUC_logit<-as.numeric(auc(logit1$y, logit1$fitted.values))
+AUC_probit<-as.numeric(auc(probit1$y, probit1$fitted.values))
+AUC <- rbind(AUC_logit, AUC_probit)
+round(AUC,4)
+```
+
+For the test set:
+```{r}
+AUC_logit<-as.numeric(auc(test_data$satisfaction, predict(logit1, test_data, type = "response")))
+AUC_probit<-as.numeric(auc(test_data$satisfaction, predict(probit1, test_data, type = "response")))
+AUC <- rbind(AUC_logit, AUC_probit)
+round(AUC,4)
+```
+
+**Conclusions**
+
+For both the training and test sets, the area under the ROC curve for the logit and probit model is 0.7496 and 0.791, respectively, indicating sufficient prediction quality for both models.
